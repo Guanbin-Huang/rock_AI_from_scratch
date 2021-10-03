@@ -1179,3 +1179,16 @@ if __name__ == "__main__":
     image = cv2.imread("12x12.jpg").transpose(2,0,1)[None]
     output = pnet(image)
     print(output)
+
+    """ 
+    The 12x12 output is unique:
+    (array([[[[4.99524422e-11]],
+
+        [[1.00000000e+00]]]]), array([[[[-0.95326938]],
+
+        [[ 4.97261597]],
+
+        [[ 4.53516063]],
+
+        [[ 8.28356677]]]]))
+     """
