@@ -428,119 +428,6 @@ class Parameter:
 
 #region Conv and Naive Conv
 
-class Kernel():
-    def __init__(self,data,stride = 1,padding = 0):
-        '''
-        arr :[out_fea,in_fea,ksize,ksize] a.k.a [groups,channels,ksize,ksize]。
-        下面讨论的都是kernel 的绝对坐标，我们不关心kernel内元素的相对坐标。
-        arr只有成为class Kenrnel的instance才能拥有以下kernel的所有功能
-        '''    
-        self.data = data
-        self.groups,self.channels,self.ksize = self.data.shape[:3]    # kernel的组数，kernel的通道数，kernel的大小
-        self.stride = stride
-        self.padding = padding
-        
-        self.st_offset = self.ksize//2            # (inclusive) img的左上角坐标直接加上start_offset就可以得到kernel在图片上的起点
-        self.ed_offset = -(self.ksize//2)         # (exclusive) img的右下角直接加上这个end_offset就可以得到kernel在图片上的终点
-        self.ele_num_each_channel = self.ksize**2 # kernel每个channel的元素个数
- 
-   
-    def get_tl(self,center):                      # 通过kernel的中心坐标获取kernel的左上角坐标（wrt img）
-        cy,cx = center
-        y,x = cy-self.ksize//2,cx-self.ksize//2   
-        return y,x
-    
-    def get_covered_pixels(self,center,itensor):  # 获取kernel覆盖到的pixels given center and itensor.
-        y,x = self.get_tl(center) 
-        pixels = itensor[:,:,y:y+self.ksize,x:x+self.ksize]     # 将所有图片，所有通道，kernel覆盖到的像素拿出来
-        return pixels
-    
-    def to_kcol(self):                                          # 将kernel变成kcol
-        return self.data.reshape(self.groups,-1)
-    
-    def get_output_img_size(self,itensor):
-        _,_,ih,iw = itensor.shape
-        oh = (ih-self.ksize + 2*self.padding)//self.stride + 1
-        ow = (iw-self.ksize + 2*self.padding)//self.stride + 1
-        return oh,ow
-
-class Conv2d(Module):
-    def __init__(self, in_feature, out_feature, kernel_size, padding=0, stride=1):
-        super().__init__("Conv2d")
-        
-        self.in_feature = in_feature
-        self.out_feature = out_feature
-        self.ksz = kernel_size
-        self.stride = stride
-        self.padding = padding
-        # self.kernel = np.array([  # only used for unit test
-        #                     [0,0,0],
-        #                     [1,1,0],
-        #                     [0,0,0]
-        #             ])[None][None]
-        self.knl_arr = np.zeros((self.out_feature, self.in_feature, self.ksz, self.ksz))
-        self.knl_obj = Kernel(self.knl_arr, stride=self.stride, padding=self.padding) # make kernel_arr to be a real kernel(knl_obj). As soon as we got the knl_obj, we mainly communicate with knl_obj.
-        self.kcol = self.knl_obj.to_kcol() # (4,9)
-        
-        self.weight = Parameter(self.knl_obj.data)  # Parameter instance
-        self.bias = Parameter(np.zeros((out_feature)))
-
-        initer = GaussInitializer(0, np.sqrt(1 / in_feature))  # np.sqrt(2 / in_feature)
-        initer.apply(self.weight.data)
-        pass
-    
-    # @cal_time
-    def forward(self, x):
-        kcol = self.kcol
-        knl_obj = self.knl_obj
-
-        # 开始构建column（挪kernel)
-        self.in_shape = x.shape
-        ib, ic, ih, iw = self.in_shape
-        self.oh, self.ow = knl_obj.get_output_img_size(x)
-        self.column = np.zeros((ib, knl_obj.ksize ** 2 * ic, self.oh * self.ow)) # (2,9,676)
-        self.output = np.zeros((ib, self.out_feature, self.oh ,self.ow)) # (2,4,26,26)
-
-        # start to carry pixels from itensor to column
-        # cy,cx 是kernel的中心
-        j = 0  # 用来表明是column的第几列
-        for cy in range(knl_obj.st_offset, ih + knl_obj.ed_offset):
-            for cx in range(knl_obj.st_offset, iw + knl_obj.ed_offset):
-                pixels = knl_obj.get_covered_pixels((cy, cx), x)
-                cols = pixels.reshape(ib, knl_obj.ksize ** 2 * knl_obj.channels, -1)  # 将多张图片的coverer_pixels放到column对应的列里去（涵盖三个通道）
-                self.column[:, :, None, j] = cols
-                j += 1
-
-        output = kcol @ self.column # (2,4,676)
-        self.output = output.reshape(ib, knl_obj.groups, self.oh, self.ow) + self.bias.data.reshape(self.out_feature,1,1)
-
-        return self.output
-
-    def backward(self, G): # 这个G已经除以了batchsize
-        # In im2col, column @ kcol = output
-        # dcolumn = G @ kcol^T
-        # dkcol = column^T @ G   G: d_L/d_output
-        ib, ic, ih, iw = self.in_shape
-        knl_obj = self.knl_obj
-        # 1. update part
-
-        self.weight.grad = np.sum((G.reshape(-1, self.out_feature, self.oh * self.ow) @ self.column.transpose(0, 2, 1)), axis = 0).reshape(self.knl_arr.shape)
-        self.bias.grad += np.sum(G, axis=(0, 2, 3))  # 因为G的第一个通道是out_feature,对应的就是有多少组kernel
-
-        # 2. pass-back part
-        self.Gout = np.zeros(self.in_shape)  # because Gout is d_L/d_input
-
-        dcolumn = self.kcol.T @ G.reshape(-1, self.out_feature, self.oh * self.ow)  # "one" input image --> v output image. If the output channel is v.
-        # this is the thing to be passed back.
-        j = 0  # indexing the j-th col in dcolumn starts from 0
-        for cy in range(knl_obj.st_offset, ih + knl_obj.ed_offset):  # the part you need to fill gradients back into dcolumn
-            for cx in range(knl_obj.st_offset, iw + knl_obj.ed_offset):
-                y,x = self.knl_obj.get_tl((cy,cx))
-                self.Gout[:, :, y:y+self.ksz, x:x+self.ksz] += dcolumn[:,:,j].reshape(ib, self.in_feature, self.ksz, self.ksz)
-                j+=1
-
-        return self.Gout
-
 class naive_Conv2d(Module):
     def __init__(self,in_feature, out_feature, kernel_size, padding = 0, stride = 1):
         super().__init__("Conv2d")
@@ -550,7 +437,9 @@ class naive_Conv2d(Module):
         self.padding = padding
         self.stride = stride
 
-        self.kernel = Parameter(np.zeros((out_feature, in_feature, kernel_size, kernel_size)))# 就是这样定义的
+        # self.kernel = Parameter(np.zeros((out_feature, in_feature, kernel_size, kernel_size)))# 就是这样定义的
+        self.kernel = Parameter(np.random.normal(0, np.sqrt(2 / in_feature), size = (out_feature, in_feature, kernel_size, kernel_size)))
+
         # self.kernel = Parameter(
         #             np.array([
         #                     [0,0,0],
@@ -558,8 +447,6 @@ class naive_Conv2d(Module):
         #                     [0,0,0] 
         #             ])[None][None])
         self.bias = Parameter(np.zeros((out_feature)))# 每一组kernel 配一个bias
-        initer = GaussInitializer(0,2/np.sqrt(in_feature))
-#         initer.apply(self.kernel.data)
 
     # @cal_time 
     def forward(self,x):
@@ -638,6 +525,79 @@ class naive_Conv2d(Module):
                                     #有多个地方贡献梯度
         
         return self.Gout
+
+
+class Conv2d(Module):
+
+    def __init__(self, in_feature, out_feature, kernel_size):
+        # self.weight = Parameter(
+        #     np.zeros((out_feature, in_feature, kernel_size, kernel_size)))
+        self.weight = Parameter(np.random.normal(0, np.sqrt(2 / in_feature), size = ((out_feature, in_feature, kernel_size, kernel_size))))
+        self.bias = Parameter(np.zeros((out_feature, 1)))
+
+        self.stride = 1
+        self.kernel_size = kernel_size
+
+    def forward(self, x):
+
+        self.x = x.copy()
+        return self.im2col(x)
+
+    def backward(self, grad):
+ 
+        self.grad = grad.copy()
+        return self.col2im(grad)
+
+    def im2col(self, x):
+        # refer to 11.39.10.5.jpg
+        # 0. info
+        self.in_shape = x.shape
+        img_num , img_c , img_h, img_w = x.shape
+
+
+        # 1. W:kcol X:column
+        self.kcol = self.weight.data.reshape(self.weight.data.shape[0], -1) # shape[0]-> 多少组卷积
+        self.column = np.zeros((img_num, self.kcol.shape[1], (img_h-self.kernel_size+1) * (img_w-self.kernel_size +1))) # kcol.shape[1]: kc * kh * kw  e.g. 回忆27 
+
+
+        # 2. im2col 
+        colj = 0
+        for icol in range(img_h-self.kernel_size+1):
+            for irow in range(img_w-self.kernel_size +1):
+                self.column[:,:,colj,None] = x[:, :, icol:icol+self.kernel_size, irow:irow + self.kernel_size].reshape(img_num,-1,1) # e.g. img_num, 27, 列     这行的None是防止 1 调了
+                colj += 1
+                
+        self.temp_output = self.kcol @ self.column + self.bias.data
+        self.temp_out_shape = self.temp_output.shape
+
+        self.output = self.temp_output.reshape(img_num, -1, img_h - self.kernel_size + 1, img_w - self.kernel_size + 1)  # 不指定channel
+        
+        return self.output
+
+
+    def col2im(self, G):
+        G = G.reshape(self.temp_out_shape)  # G: dL / dC dL / d_output , 所以拥有同样的形状  一上来就将G变成 out的形状
+        
+        # 0. 更新部分
+        del_kcol = (G @ self.column.transpose(0,2,1)).sum(axis = 0)  # weight.grad       sum(axis = 0 )指的是将所有的样本贡献的梯度都加起来
+        self.weight.grad = del_kcol.reshape(self.weight.data.shape)  # del_W = dL / dW
+
+        # 1. 反传部分
+        del_column = self.kcol.T @ G  # del_column 和 column
+        del_X = np.zeros(self.in_shape) # 接下去要将del_column 的值正确地填进去del_X里。 Gout: del_X: dL/dx : x :in_shape
+
+        # 2. col2im
+        img_num, ic, ih, iw = self.in_shape
+        out_fea, in_fea, kh, kw = self.weight.data.shape
+        
+        del_colj = 0
+        for iy in range(0, ih - kh + 1, self.stride):
+            for ix in range(0, iw - kw + 1, self.stride):
+                select_cols = del_column[: ,:, del_colj,None].reshape(img_num, in_fea, kh, kw) # 选完batch内的所有图片，所有行，del_col_x列
+                del_X[:, :, iy:iy + kh, ix:ix + kw] += select_cols
+                del_colj += 1
+        
+        return del_X
 
 
 
@@ -799,20 +759,20 @@ class Dropout(Module):
 class Maxpool2d(Module):
     def __init__(self, kernel_size = 2, stride = 2):
         super().__init__("Maxpool")
-        self.ksize = kernel_size
+        self.kernel_size = kernel_size
         self.stride = stride
 
     def forward(self, x): # not considering padding
         self.in_shape = x.shape
         ib, ic, ih, iw = x.shape
-        self.oh = (ih - self.ksize)//self.stride + 1 #!    //stride + 1
-        self.ow = (iw - self.ksize)//self.stride + 1
+        self.oh = (ih - self.kernel_size)//self.stride + 1 #!    //stride + 1
+        self.ow = (iw - self.kernel_size)//self.stride + 1
         output = np.zeros((ib,ic,self.oh,self.ow))
 
         for oy in range(self.oh):
             for ox in range(self.ow):
-                output[:,:, oy, ox] = np.max(x[:, :, oy*self.stride: oy*self.stride + self.ksize,
-                                                     ox*self.stride: ox*self.stride + self.ksize ], axis = (2,3)) #! axis = (2,3)
+                output[:,:, oy, ox] = np.max(x[:, :, oy*self.stride: oy*self.stride + self.kernel_size,
+                                                     ox*self.stride: ox*self.stride + self.kernel_size ], axis = (2,3)) #! axis = (2,3)
 
             '''
             No need to worry about the even or odd value of the size.
@@ -1100,7 +1060,7 @@ class PNet(Module):
     def __init__(self):
         super().__init__("PNet")
         self.backbone = Sequential(
-            Conv2d(in_feature=3, out_feature=10, kernel_size=3),
+            Conv2d(in_feature=3, out_feature=10, kernel_size = 3),
             PReLU(num_feature=10),
             Maxpool2d(),
             Conv2d(10,16,3),
@@ -1150,20 +1110,17 @@ class PNet(Module):
         layer_info: layer structure containing parameters information which is needed to be deconstructed to access.
         '''
         weight_shape = layer_info.blobs[0].shape.dim
-        bias_shape = layer_info.blobs[1].shape.dim
+        bias_shape = layer_info.blobs[1].shape.dim[0]
         weights = np.array(layer_info.blobs[0].data)
         bias = np.array(layer_info.blobs[1].data)
 
-        layer_ins.knl_obj.data[...] = weights.reshape(weight_shape)
-        layer_ins.bias.data[...] = bias.reshape(bias_shape)
+        layer_ins.weight.data[...] = weights.reshape(weight_shape)
+        layer_ins.bias.data[...] = bias.reshape(bias_shape, 1)
 
         return layer_ins
 
     def fill_prelu(self, layer_ins, layer_info):
-        '''
-        layer_ins: layer instance from e,g. class Conv2d. No parameters in it.
-        layer_info: layer structure containing parameters information which is needed to be deconstructed to access.
-        '''
+
         coeff_shape = layer_info.blobs[0].shape.dim
         coeff = np.array(layer_info.blobs[0].data)
         
@@ -1171,14 +1128,17 @@ class PNet(Module):
         
         return layer_ins
 
-
 if __name__ == "__main__":
     pnet = PNet()
     pnet.load("./mtcnn/det1.caffemodel")
 
-    image = cv2.imread("12x12.jpg").transpose(2,0,1)[None]
+    image = cv2.imread("./imgs/12x12.jpg").transpose(2,0,1)[None]
+
+    # image = np.zeros((1, 3, 120, 120))
     output = pnet(image)
     print(output)
+    print(output[0].shape)
+    
 
     """ 
     The 12x12 output is unique:

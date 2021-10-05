@@ -1,0 +1,1 @@
+The comparision between nn and conv dosn't make 100% sense. They compare just for demonstrating the advantage of convolution over fully-conneted layer.
