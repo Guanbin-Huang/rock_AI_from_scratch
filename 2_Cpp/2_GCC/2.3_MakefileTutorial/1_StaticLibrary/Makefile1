@@ -1,0 +1,66 @@
+
+cpp_srcs := $(shell find src -name "*.cpp")
+# 方法一：
+cpp_objs := $(patsubst src%cpp,objs%o,$(cpp_srcs))
+
+
+objs_lib := aaa bbb
+OBJS_LIB := $(objs)say.o $(objs)sayhello.o
+
+
+debug :
+	@echo $(dir workspace/exec)
+# 方法二：
+# cpp_objs := $(subst src,objs,$(cpp_srcs))
+# cpp_objs := $(subst cpp,o,$(cpp_objs))
+
+include_paths := /datav/MyLesson/2_Cpp/2_GCC/2.3_MakefileTutorial/1_StaticLibrary/include 
+library_paths := /datav/MyLesson/2_Cpp/2_GCC/2.3_MakefileTutorial/1_StaticLibrary/lib
+link_library  := xxx
+
+# # 方法一：
+# I_option := $(foreach item,$(include_paths),-I$(item))
+# l_option := $(foreach item,$(link_library),-l$(item))
+# L_option := $(foreach item,$(library_paths),-L$(item))
+# # r_option := $(foreach item,$(library_paths),-Wl,-rpath=$(item))
+
+# 方法二：
+I_option := $(include_paths:%=-I%)
+l_option := $(link_library:%=-l%)
+L_option := $(library_paths:%=-L%)
+# r_option := $(library_paths:%=-Wl,-rpath=%)
+
+compile_options := -O3 -g -std=c++11 $(I_option)
+link_options    := $(l_option) $(L_option)
+
+
+objs/%.o : src/%.cpp
+	@mkdir -p $(dir $@)
+	@g++ -c $^ -o $@ $(compile_options)
+
+objs : $(cpp_objs)
+
+lib/libxxx.a : objs/say.o objs/sayhello.o
+	@mkdir -p $(dir $@)
+	@ar -r $@ $^
+
+lib : lib/libxxx.a
+
+workspace/exec : objs/saymain.o
+	@g++ $< -o $@ $(link_options)
+
+
+run : workspace/exec
+	@./$<
+
+
+
+
+clean :
+	@rm -rf lib objs 
+
+.PHONY : clean debug lib objs
+
+
+
+

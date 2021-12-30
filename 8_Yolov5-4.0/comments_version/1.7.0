@@ -1,0 +1,11 @@
+Looking in indexes: https://pypi.tuna.tsinghua.edu.cn/simple
+Collecting onnx
+  Downloading https://pypi.tuna.tsinghua.edu.cn/packages/5b/f3/5509ab7b564229cfb740914028a24ffb1a5381f044b9c843f35222451657/onnx-1.8.0-cp38-cp38-win_amd64.whl (6.9 MB)
+Requirement already satisfied: numpy in c:\programdata\anaconda3\envs\yolov5\lib\site-packages (from onnx) (1.19.1)
+Requirement already satisfied: protobuf in c:\programdata\anaconda3\envs\yolov5\lib\site-packages (from onnx) (3.13.0)
+Collecting typing-extensions>=3.6.2.1
+  Downloading https://pypi.tuna.tsinghua.edu.cn/packages/60/7a/e881b5abb54db0e6e671ab088d079c57ce54e8a01a3ca443f561ccadb37e/typing_extensions-3.7.4.3-py3-none-any.whl (22 kB)
+Requirement already satisfied: six in c:\programdata\anaconda3\envs\yolov5\lib\site-packages (from onnx) (1.15.0)
+Requirement already satisfied: setuptools in c:\programdata\anaconda3\envs\yolov5\lib\site-packages (from protobuf->onnx) (50.3.0.post20201006)
+Installing collected packages: typing-extensions, onnx
+Successfully installed onnx-1.8.0 typing-extensions-3.7.4.3

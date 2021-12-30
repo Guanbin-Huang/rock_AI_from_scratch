@@ -1,0 +1,44 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            // train
+            "program": "train.py",
+            "args": ["--data", "data/voc.yaml",
+                    "--cfg", "models/yolov5s_for_voc2007.yaml",
+                    "--weights","weights/yolov5s.pt",
+                    // "--cfg", "models/yolov5x_for_voc2007.yaml",
+                    // "--weights","weights/yolov5x.pt",
+                    "--batch-size", "16", 
+                    "--epochs", "200"
+                    // "--rect"    
+                ],
+            
+            // test
+            // "program": "test.py",
+            // "args": ["--data", "data/voc.yaml",
+            //         "--weights","weights/yolov5s.pt",
+            //         "--batch-size", "16", 
+            //         ],
+
+
+            // detect
+            // "program": "detect.py",
+            // "args": ["--weights", "./weights/yolov5s.pt",
+            //         "--img", "640",
+            //         "--conf", "0.25", 
+            //         "--source", "data/images/"
+            // ],
+            
+            "console": "integratedTerminal",
+            // "justMyCode": True
+        }
+    ]
+}
+
